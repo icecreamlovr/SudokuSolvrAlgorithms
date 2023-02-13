@@ -116,10 +116,156 @@ public class ConstraintsUpdateAndOrderingSolvr implements SudokuSolvr {
     List<Integer>[] allNeighbors = getInitialNeighborsInfo(board);
     Constraints[] allConstraints = getInitialConstraintsInfo(board);
     List<Set<Integer>> buckets = getInitialBuckets(allConstraints);
-    printAllContext(board, allNeighbors, allConstraints, buckets);
+    // printAllContext(board, allNeighbors, allConstraints, buckets);
+
+    return solveRecur(board, allNeighbors, allConstraints, buckets);
+  }
+
+  // The following methods are used for recursively solving Sudoku.
+
+  private boolean solveRecur(
+          int[][] board,
+          List<Integer>[] allNeighbors,
+          Constraints[] allConstraints,
+          List<Set<Integer>> buckets) {
+    if (!isSolvable(buckets)) {
+      return false;
+    }
+
+    int currentCellNumber = getNextCellToSolve(buckets);
+    if (currentCellNumber == -1) {
+      return true;
+    }
+    int row = getRow(currentCellNumber);
+    int col = getCol(currentCellNumber);
+
+    List<Integer> neighbors = allNeighbors[currentCellNumber];
+    Constraints cellConstraints = allConstraints[currentCellNumber];
+    int currentBucketNumber = cellConstraints.getBucketNumber();
+    if (cellConstraints == null || neighbors == null) {
+      throw new IllegalStateException("Expecting cell and neighbors to have value. Getting null.");
+    }
+
+    // Remove the cell from sorted cells for future processing.
+    removeFromBuckets(buckets, currentBucketNumber, currentCellNumber);
+
+    // Make guesses
+    for (int guess = 1; guess <= 9; guess++) {
+      if (cellConstraints.hasConstraint(guess)) {
+        continue;
+      }
+
+      // Update board with the guess.
+      // Also update constraints and buckets for all cells this one touches.
+      board[row][col] = guess;
+      List<Integer> impacted =
+              processGuessForNeighbors(neighbors, guess, board, allConstraints, buckets);
+
+      boolean guessIsGood = solveRecur(board, allNeighbors, allConstraints, buckets);
+      if (guessIsGood) {
+        // Guess worked - Sudoku is solved.
+        // Return true without cleaning the board.
+        return true;
+      } else {
+        // Guess failed. Reset.
+        board[row][col] = 0;
+        revertGuessForAllImpacted(impacted, guess, allConstraints, buckets);
+      }
+    }
+
+    // If none of the guesses is successful, board clean up is done in the loop.
+    // Add the cell back to sorted cells for future processing
+    addToBuckets(buckets, currentBucketNumber, currentCellNumber);
 
     return false;
+
   }
+
+  private static boolean isSolvable(List<Set<Integer>> buckets) {
+    return buckets.get(9).isEmpty();
+  }
+
+  private static int getNextCellToSolve(List<Set<Integer>> buckets) {
+    for (int i = 8; i >= 0; i--) {
+      if (buckets.get(i).isEmpty()) {
+        continue;
+      }
+      return buckets.get(i).iterator().next();
+    }
+    // This means all cells are solved and all buckets are empty.
+    return -1;
+  }
+
+  // After making a guess on a cell (X), process a few things:
+  // - Find all the row/col/square cells (Y) this cell touches
+  // - Add this cell's guess to the row/col/square cells constraints
+  // - If this result in change of constraint of Y, promote Y in the buckets
+  // - Cache Y in X's impacted cells. This will be used when resetting.
+  private static List<Integer> processGuessForNeighbors(
+          List<Integer> neighbors,
+          int guess,
+          int[][] board,
+          Constraints[] allConstraints,
+          List<Set<Integer>> buckets) {
+    List<Integer> impacted = new LinkedList<>();
+
+    for (Integer yCellNumber : neighbors) {
+      int yRow = getRow(yCellNumber);
+      int yCol = getCol(yCellNumber);
+      // Do the extra check since some neighbors might already have a guess.
+      if (board[yRow][yCol] == 0) {
+        boolean yIsImpacted =
+                processGuessForOneNeighbor(guess, allConstraints[yCellNumber], yCellNumber, buckets);
+        if (yIsImpacted) {
+          impacted.add(yCellNumber);
+        }
+      }
+    }
+    return impacted;
+  }
+
+  private static boolean processGuessForOneNeighbor(
+          int guess, Constraints yConstraints, int yCellNumber, List<Set<Integer>> buckets) {
+    if (yConstraints.hasConstraint(guess)) {
+      return false;
+    }
+
+    int originalBucketNumber = yConstraints.getBucketNumber();
+    yConstraints.addConstraint(guess);
+    removeFromBuckets(buckets, originalBucketNumber, yCellNumber);
+    addToBuckets(buckets, originalBucketNumber + 1, yCellNumber);
+
+    return true;
+  }
+
+  // When a guess is unsuccessful, revert the impact of processGuessForAllNeighbors().
+  private static void revertGuessForAllImpacted(
+          List<Integer> impacted, int guess, Constraints[] allConstraints, List<Set<Integer>> buckets) {
+    for (Integer yCellNumber : impacted) {
+      revertGuessForOneImpacted(guess, allConstraints[yCellNumber], yCellNumber, buckets);
+    }
+  }
+
+  private static void revertGuessForOneImpacted(
+          int guess, Constraints yConstraints, int yCellNumber, List<Set<Integer>> buckets) {
+    int newBucketNumber = yConstraints.getBucketNumber();
+    boolean removed = yConstraints.removeConstraint(guess);
+    if (!removed) {
+      throw new IllegalStateException("Expecting to revert constraint, but constraint didn't exist.");
+    }
+    removeFromBuckets(buckets, newBucketNumber, yCellNumber);
+    addToBuckets(buckets, newBucketNumber - 1, yCellNumber);
+  }
+
+  private static void removeFromBuckets(List<Set<Integer>> buckets, int bucketNumber, int cellNumber) {
+    buckets.get(bucketNumber).remove(cellNumber);
+  }
+
+  private static void addToBuckets(List<Set<Integer>> buckets, int bucketNumber, int cellNumber) {
+    buckets.get(bucketNumber).add(cellNumber);
+  }
+
+  // The following methods are used for preprocessing the board.
 
   // Preprocess the initial board and get neighbors information for each EMPTY cell.
   private static List<Integer>[] getInitialNeighborsInfo(int[][] board) {
@@ -250,6 +396,8 @@ public class ConstraintsUpdateAndOrderingSolvr implements SudokuSolvr {
     }
     return buckets;
   }
+
+  // The following methods are helpers.
 
   private static int getCellNumber(int row, int col) {
     return row * 9 + col;
